@@ -1,5 +1,6 @@
 package de.damcraft.serverseeker.gui;
 
+import de.damcraft.serverseeker.api.Credits;
 import de.damcraft.serverseeker.api.Server;
 import de.damcraft.serverseeker.api.ServerQuery;
 import de.damcraft.serverseeker.api.ServersResponse;
@@ -99,13 +100,17 @@ public class FindPlayerScreen extends WindowScreen {
         if (resp == null) { add(theme.label("Network error")).expandX(); return; }
         if (resp.isError()) { add(theme.label(resp.error)).expandX(); return; }
 
+        Credits.update(resp.credits);
+
         List<Server> servers = resp.data;
         if (servers == null || servers.isEmpty()) {
             add(theme.label("No servers found")).expandX();
+            add(theme.label(Credits.summary())).expandX();
             return;
         }
 
         add(theme.label("Found " + servers.size() + (servers.size() == LIMIT ? "+" : "") + " servers")).expandX();
+        add(theme.label(Credits.summary())).expandX();
         WButton addAll = add(theme.button("Add all")).expandX().widget();
         addAll.action = () -> {
             ServerResults.addAll(servers, multiplayerScreen);

@@ -2,6 +2,7 @@ package de.damcraft.serverseeker.gui;
 
 import de.damcraft.serverseeker.ServerSeeker;
 import de.damcraft.serverseeker.api.CountResponse;
+import de.damcraft.serverseeker.api.Credits;
 import de.damcraft.serverseeker.api.IpUtil;
 import de.damcraft.serverseeker.api.Server;
 import de.damcraft.serverseeker.api.ServerQuery;
@@ -55,7 +56,7 @@ public class BedrockSearchScreen extends WindowScreen {
     private final Setting<String> version = sg.add(new StringSetting.Builder()
         .name("version").description("Version name contains.").defaultValue("").build());
     private final Setting<String> gamemode = sg.add(new StringSetting.Builder()
-        .name("gamemode").description("Game mode contains (e.g. Survival).").defaultValue("").build());
+        .name("gamemode").description("Exact game mode, e.g. Survival (not a partial match).").defaultValue("").build());
     private final Setting<String> description = sg.add(new StringSetting.Builder()
         .name("MOTD").description("Text the server description must contain.").defaultValue("").build());
     private final Setting<Country> country = sg.add(new CountrySetting.Builder()
@@ -141,10 +142,13 @@ public class BedrockSearchScreen extends WindowScreen {
         if (resp == null) { add(theme.label("Network error")).expandX(); return; }
         if (resp.isError()) { add(theme.label(resp.error)).expandX(); return; }
 
+        Credits.update(resp.credits);
+
         List<Server> servers = resp.data;
         int shown = servers == null ? 0 : servers.size();
         String totalStr = total < 0 ? "?" : String.valueOf(total);
         add(theme.label("Page " + (page + 1) + " • " + shown + " shown • " + totalStr + " total")).expandX();
+        add(theme.label(Credits.summary())).expandX();
 
         WHorizontalList nav = add(theme.horizontalList()).expandX().widget();
         nav.add(theme.button("< Prev")).expandX().widget().action = () -> { if (page > 0) { page--; fetchPage(); } };

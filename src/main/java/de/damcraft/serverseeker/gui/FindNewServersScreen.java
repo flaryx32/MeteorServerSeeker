@@ -2,6 +2,7 @@ package de.damcraft.serverseeker.gui;
 
 import de.damcraft.serverseeker.ServerSeeker;
 import de.damcraft.serverseeker.api.CountResponse;
+import de.damcraft.serverseeker.api.Credits;
 import de.damcraft.serverseeker.api.IpUtil;
 import de.damcraft.serverseeker.api.Server;
 import de.damcraft.serverseeker.api.ServerQuery;
@@ -77,6 +78,26 @@ public class FindNewServersScreen extends WindowScreen {
                 case LastHour -> 3600;
                 case Last6Hours -> 21600;
                 case LastDay -> 86400;
+            };
+        }
+    }
+
+    public enum SeenBefore {
+        Any, OverAnHourAgo, Over6HoursAgo, OverADayAgo;
+        @Override public String toString() {
+            return switch (this) {
+                case Any -> "Any";
+                case OverAnHourAgo -> "Over an hour ago";
+                case Over6HoursAgo -> "Over 6 hours ago";
+                case OverADayAgo -> "Over a day ago";
+            };
+        }
+        public long secondsAgo() {
+            return switch (this) {
+                case Any -> -1;
+                case OverAnHourAgo -> 3600;
+                case Over6HoursAgo -> 21600;
+                case OverADayAgo -> 86400;
             };
         }
     }
@@ -163,6 +184,18 @@ public class FindNewServersScreen extends WindowScreen {
     private final Setting<String> onlineUuid = sgAdv.add(new StringSetting.Builder()
         .name("online-uuid").description("UUID of a player currently online.").defaultValue("").visible(advanced::get).build());
 
+    private final Setting<SeenBefore> seenBefore = sgAdv.add(new EnumSetting.Builder<SeenBefore>()
+        .name("seen-before").description("Only servers last pinged before this window (likely offline).").defaultValue(SeenBefore.Any).visible(advanced::get).build());
+
+    private final Setting<TriState> hasPlayerHistory = sgAdv.add(new EnumSetting.Builder<TriState>()
+        .name("has-player-history").description("Whether the server has any recorded player history.").defaultValue(TriState.Any).visible(advanced::get).build());
+
+    private final Setting<TriState> enforcesSecureChat = sgAdv.add(new EnumSetting.Builder<TriState>()
+        .name("enforces-secure-chat").description("Whether the server enforces secure chat.").defaultValue(TriState.Any).visible(advanced::get).build());
+
+    private final Setting<TriState> forge = sgAdv.add(new EnumSetting.Builder<TriState>()
+        .name("forge").description("Whether the server has Forge mod data.").defaultValue(TriState.Any).visible(advanced::get).build());
+
     public FindNewServersScreen(JoinMultiplayerScreen multiplayerScreen) {
         super(GuiThemes.get(), "Find servers");
         this.multiplayerScreen = multiplayerScreen;
@@ -235,10 +268,13 @@ public class FindNewServersScreen extends WindowScreen {
             return;
         }
 
+        Credits.update(resp.credits);
+
         List<Server> servers = resp.data;
         int shown = servers == null ? 0 : servers.size();
         String totalStr = total < 0 ? "?" : String.valueOf(total);
         add(theme.label("Page " + (page + 1) + " • " + shown + " shown • " + totalStr + " total")).expandX();
+        add(theme.label(Credits.summary())).expandX();
 
         WHorizontalList nav = add(theme.horizontalList()).expandX().widget();
         nav.add(theme.button("Back")).expandX().widget().action = () -> { showingResults = false; reload(); };
@@ -324,9 +360,20 @@ public class FindNewServersScreen extends WindowScreen {
         q.add("uuidHistory", uuidHistory.get());
         q.add("onlineUuid", onlineUuid.get());
 
+        Boolean ph = hasPlayerHistory.get().toBoolOrNull();
+        if (ph != null) q.add("hasPlayerHistory", ph);
+        Boolean sc = enforcesSecureChat.get().toBoolOrNull();
+        if (sc != null) q.add("enforcesSecureChat", sc);
+        Boolean fg = forge.get().toBoolOrNull();
+        if (fg != null) q.add("forge", fg);
+
         if (seenAfter.get() != SeenAfter.Any) {
             long cutoff = System.currentTimeMillis() / 1000 - seenAfter.get().secondsAgo();
             q.add("seenAfter", cutoff);
+        }
+        if (seenBefore.get() != SeenBefore.Any) {
+            long cutoff = System.currentTimeMillis() / 1000 - seenBefore.get().secondsAgo();
+            q.add("seenBefore", cutoff);
         }
         return q;
     }

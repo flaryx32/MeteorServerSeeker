@@ -1,6 +1,7 @@
 package de.damcraft.serverseeker.gui;
 
 import de.damcraft.serverseeker.api.CountResponse;
+import de.damcraft.serverseeker.api.Credits;
 import de.damcraft.serverseeker.api.Server;
 import de.damcraft.serverseeker.api.ServerQuery;
 import de.damcraft.serverseeker.api.ServersResponse;
@@ -49,6 +50,7 @@ public class RandomScreen extends WindowScreen {
             CountResponse count = Http.get(countUrl)
                 .exceptionHandler(e -> LOG.error("Could not fetch count: ", e))
                 .sendJson(CountResponse.class);
+            if (count != null) Credits.update(count.credits);
             long recent = count == null ? 0 : count.data;
             if (recent <= 0) {
                 Minecraft.getInstance().execute(() -> render(null));
@@ -60,6 +62,7 @@ public class RandomScreen extends WindowScreen {
             ServersResponse resp = Http.get(url)
                 .exceptionHandler(e -> LOG.error("Could not fetch random server: ", e))
                 .sendJson(ServersResponse.class);
+            if (resp != null) Credits.update(resp.credits);
 
             Server server = (resp == null || resp.data == null || resp.data.isEmpty()) ? null : resp.data.get(0);
             Minecraft.getInstance().execute(() -> render(server));

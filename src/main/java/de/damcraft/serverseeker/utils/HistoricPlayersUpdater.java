@@ -24,7 +24,7 @@ public class HistoricPlayersUpdater {
     private static void onGameJoinEvent(GameJoinedEvent ignoredEvent) {
         new Thread(HistoricPlayersUpdater::update).start();
     }
-
+    
     public static void update() {
         List<HistoricPlayersHud> huds = new ArrayList<>();
         for (HudElement hudElement : Hud.get()) {

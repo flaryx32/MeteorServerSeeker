@@ -1,5 +1,6 @@
 package de.damcraft.serverseeker.gui;
 
+import de.damcraft.serverseeker.api.Credits;
 import de.damcraft.serverseeker.api.IpUtil;
 import de.damcraft.serverseeker.api.Server;
 import de.damcraft.serverseeker.api.ServerQuery;
@@ -76,6 +77,7 @@ public class ServerInfoScreen extends WindowScreen {
 
         if (resp == null) { add(theme.label("Network error")).expandX(); return; }
         if (resp.isError()) { add(theme.label(resp.error)).expandX(); return; }
+        Credits.update(resp.credits);
         if (resp.data == null || resp.data.isEmpty()) {
             add(theme.label("Server not found in the database.")).expandX();
             add(theme.button("Join anyway")).expandX().widget().action = () -> ServerResults.join(address);
