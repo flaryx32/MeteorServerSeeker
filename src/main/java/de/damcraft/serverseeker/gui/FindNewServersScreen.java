@@ -1,81 +1,43 @@
 package de.damcraft.serverseeker.gui;
 
-import com.google.common.net.HostAndPort;
 import de.damcraft.serverseeker.ServerSeeker;
+import de.damcraft.serverseeker.api.CountResponse;
+import de.damcraft.serverseeker.api.IpUtil;
+import de.damcraft.serverseeker.api.Server;
+import de.damcraft.serverseeker.api.ServerQuery;
+import de.damcraft.serverseeker.api.ServersResponse;
 import de.damcraft.serverseeker.country.Country;
 import de.damcraft.serverseeker.country.CountrySetting;
-import de.damcraft.serverseeker.ssapi.requests.ServersRequest;
-import de.damcraft.serverseeker.ssapi.responses.ServersResponse;
-import de.damcraft.serverseeker.utils.MCVersionUtil;
-import de.damcraft.serverseeker.utils.MultiplayerScreenUtil;
 import meteordevelopment.meteorclient.gui.GuiThemes;
 import meteordevelopment.meteorclient.gui.WindowScreen;
 import meteordevelopment.meteorclient.gui.widgets.containers.WContainer;
+import meteordevelopment.meteorclient.gui.widgets.containers.WHorizontalList;
 import meteordevelopment.meteorclient.gui.widgets.containers.WTable;
 import meteordevelopment.meteorclient.gui.widgets.pressable.WButton;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.utils.network.Http;
 import meteordevelopment.meteorclient.utils.network.MeteorExecutor;
-import net.minecraft.SharedConstants;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.TitleScreen;
-import net.minecraft.client.gui.screen.multiplayer.ConnectScreen;
-import net.minecraft.client.gui.screen.multiplayer.MultiplayerScreen;
-import net.minecraft.client.network.ServerAddress;
-import net.minecraft.client.network.ServerInfo;
-import net.minecraft.nbt.NbtCompound;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen;
+import net.minecraft.nbt.CompoundTag;
 
 import java.util.List;
 
 import static de.damcraft.serverseeker.ServerSeeker.LOG;
 
 public class FindNewServersScreen extends WindowScreen {
-    public static NbtCompound savedSettings;
-    private int timer;
-    public WButton findButton;
-    private boolean threadHasFinished;
-    private String threadError;
-    private List<ServersResponse.Server> threadServers;
+    private static final int LIMIT = 10;
+    public static CompoundTag savedSettings;
 
-    public enum Cracked {
-        Any,
-        Yes,
-        No;
+    private final JoinMultiplayerScreen multiplayerScreen;
 
-        public Boolean toBoolOrNull() {
-            return switch (this) {
-                case Any -> null;
-                case Yes -> true;
-                case No -> false;
-            };
-        }
-    }
-
-    public enum Version {
-        Current,
-        Any,
-        Protocol,
-        VersionString;
-
-        @Override
-        public String toString() {
-            return switch (this) {
-                case Current -> "Current";
-                case Any -> "Any";
-                case Protocol -> "Protocol";
-                case VersionString -> "Version String";
-            };
-        }
-    }
+    private int page;
+    private long total = -1;
+    private boolean showingResults;
 
     public enum NumRangeType {
-        Any,
-        Equals,
-        AtLeast,
-        AtMost,
-        Between;
-        @Override
-        public String toString() {
+        Any, Equals, AtLeast, AtMost, Between;
+        @Override public String toString() {
             return switch (this) {
                 case Any -> "Any";
                 case Equals -> "Equal To";
@@ -86,432 +48,316 @@ public class FindNewServersScreen extends WindowScreen {
         }
     }
 
-    // Didn't have a better name
-    public enum GeoSearchType {
-        None,
-        ASN,
-        Country
+    public enum Sort {
+        None, LastPingNewOld, LastPingOldNew, DiscoveredNewOld, DiscoveredOldNew;
+        @Override public String toString() {
+            return switch (this) {
+                case None -> "None";
+                case LastPingNewOld -> "Last Ping (new to old)";
+                case LastPingOldNew -> "Last Ping (old to new)";
+                case DiscoveredNewOld -> "Discovered (new to old)";
+                case DiscoveredOldNew -> "Discovered (old to new)";
+            };
+        }
+    }
+
+    public enum SeenAfter {
+        Any, LastHour, Last6Hours, LastDay;
+        @Override public String toString() {
+            return switch (this) {
+                case Any -> "Any";
+                case LastHour -> "Last hour";
+                case Last6Hours -> "Last 6 hours";
+                case LastDay -> "Last day";
+            };
+        }
+        public long secondsAgo() {
+            return switch (this) {
+                case Any -> -1;
+                case LastHour -> 3600;
+                case Last6Hours -> 21600;
+                case LastDay -> 86400;
+            };
+        }
     }
 
     private final Settings settings = new Settings();
     private final SettingGroup sg = settings.getDefaultGroup();
+    private final SettingGroup sgAdv = settings.createGroup("Advanced");
     WContainer settingsContainer;
 
-    private final Setting<Cracked> crackedSetting = sg.add(new EnumSetting.Builder<Cracked>()
-        .name("cracked")
-        .description("Whether the server should be cracked or not")
-        .defaultValue(Cracked.Any)
-        .build()
-    );
+    // Curated
+    private final Setting<TriState> cracked = sg.add(new EnumSetting.Builder<TriState>()
+        .name("cracked").description("Whether the server is in offline mode.").defaultValue(TriState.Any).build());
 
-    private final Setting<NumRangeType> onlinePlayersNumTypeSetting = sg.add(new EnumSetting.Builder<NumRangeType>()
-        .name("online-players-range")
-        .description("The type of number range for the online players")
-        .defaultValue(NumRangeType.Any)
-        .build()
-    );
+    private final Setting<NumRangeType> onlinePlayersType = sg.add(new EnumSetting.Builder<NumRangeType>()
+        .name("online-players-range").description("How to match the online player count.").defaultValue(NumRangeType.Any).build());
+    private final Setting<Integer> onlinePlayersMin = sg.add(new IntSetting.Builder()
+        .name("online-players-min").description("Minimum online players.").defaultValue(1).min(0).noSlider()
+        .visible(() -> onlinePlayersType.get() != NumRangeType.Any && onlinePlayersType.get() != NumRangeType.AtMost).build());
+    private final Setting<Integer> onlinePlayersMax = sg.add(new IntSetting.Builder()
+        .name("online-players-max").description("Maximum online players.").defaultValue(20).min(0).noSlider()
+        .visible(() -> onlinePlayersType.get() == NumRangeType.AtMost || onlinePlayersType.get() == NumRangeType.Between).build());
 
-    private final Setting<Integer> equalsOnlinePlayersSetting = sg.add(new IntSetting.Builder()
-            .name("online-players")
-            .description("The amount of online players the server should have")
-            .defaultValue(2)
-            .min(0)
-            .visible(() -> onlinePlayersNumTypeSetting.get().equals(NumRangeType.Equals))
-            .noSlider()
-            .build()
-    );
+    private final Setting<Integer> playerCap = sg.add(new IntSetting.Builder()
+        .name("player-cap").description("Exact max-player capacity (-1 = any).").defaultValue(-1).min(-1).noSlider().build());
 
+    private final Setting<String> version = sg.add(new StringSetting.Builder()
+        .name("version").description("Version name contains (e.g. 1.21).").defaultValue("").build());
 
-    private final Setting<Integer> atLeastOnlinePlayersSetting = sg.add(new IntSetting.Builder()
-        .name("minimum-online-players")
-        .description("The minimum amount of online players the server should have")
-        .defaultValue(1)
-        .min(0)
-        .visible(() -> onlinePlayersNumTypeSetting.get().equals(NumRangeType.AtLeast) || onlinePlayersNumTypeSetting.get().equals(NumRangeType.Between))
-        .noSlider()
-        .build()
-    );
+    private final Setting<String> description = sg.add(new StringSetting.Builder()
+        .name("MOTD").description("Text the server description must contain.").defaultValue("").build());
 
-    private final Setting<Integer> atMostOnlinePlayersSetting = sg.add(new IntSetting.Builder()
-        .name("maximum-online-players")
-        .description("The maximum amount of online players the server should have")
-        .defaultValue(20)
-        .min(0)
-        .visible(() -> onlinePlayersNumTypeSetting.get().equals(NumRangeType.AtMost) || onlinePlayersNumTypeSetting.get().equals(NumRangeType.Between))
-        .noSlider()
-        .build()
-    );
+    private final Setting<Country> country = sg.add(new CountrySetting.Builder()
+        .name("country").description("Country the server is hosted in.").defaultValue(ServerSeeker.COUNTRY_MAP.get("UN")).build());
 
+    private final Setting<String> onlinePlayer = sg.add(new StringSetting.Builder()
+        .name("online-player").description("Name of a player currently online.").defaultValue("").build());
 
-    private final Setting<NumRangeType> maxPlayersNumTypeSetting = sg.add(new EnumSetting.Builder<NumRangeType>()
-        .name("max-players-range")
-        .description("The type of number range for the max players")
-        .defaultValue(NumRangeType.Any)
-        .build()
-    );
+    private final Setting<TriState> whitelisted = sg.add(new EnumSetting.Builder<TriState>()
+        .name("whitelisted").description("Whether the server has a whitelist.").defaultValue(TriState.Any).build());
 
-    private final Setting<Integer> equalsMaxPlayersSetting = sg.add(new IntSetting.Builder()
-            .name("max-players")
-            .description("The amount of max players the server should have")
-            .defaultValue(2)
-            .min(0)
-            .visible(() -> maxPlayersNumTypeSetting.get().equals(NumRangeType.Equals))
-            .noSlider()
-            .build()
-    );
+    // Advanced
+    private final Setting<Boolean> advanced = sgAdv.add(new BoolSetting.Builder()
+        .name("advanced").description("Show advanced filters.").defaultValue(false).build());
 
+    private final Setting<Sort> sort = sgAdv.add(new EnumSetting.Builder<Sort>()
+        .name("sort").description("Result ordering.").defaultValue(Sort.LastPingNewOld).visible(advanced::get).build());
 
-    private final Setting<Integer> atLeastMaxPlayersSetting = sg.add(new IntSetting.Builder()
-        .name("minimum-max-players")
-        .description("The minimum amount of max players the server should have")
-        .defaultValue(1)
-        .min(0)
-        .visible(() -> maxPlayersNumTypeSetting.get().equals(NumRangeType.AtLeast) || maxPlayersNumTypeSetting.get().equals(NumRangeType.Between))
-        .noSlider()
-        .build()
-    );
+    private final Setting<SeenAfter> seenAfter = sgAdv.add(new EnumSetting.Builder<SeenAfter>()
+        .name("seen-after").description("Only servers pinged within this window.").defaultValue(SeenAfter.Any).visible(advanced::get).build());
 
-    private final Setting<Integer> atMostMaxPlayersSetting = sg.add(new IntSetting.Builder()
-        .name("maximum-max-players")
-        .description("The maximum amount of max players the server should have")
-        .defaultValue(20)
-        .min(0)
-        .visible(() -> maxPlayersNumTypeSetting.get().equals(NumRangeType.AtMost) || maxPlayersNumTypeSetting.get().equals(NumRangeType.Between))
-        .noSlider()
-        .build()
-    );
+    private final Setting<Integer> protocol = sgAdv.add(new IntSetting.Builder()
+        .name("protocol").description("Exact protocol version (-1 = any).").defaultValue(-1).min(-1).noSlider().visible(advanced::get).build());
 
-    private final Setting<String> descriptionSetting = sg.add(new StringSetting.Builder()
-        .name("MOTD")
-        .description("What the MOTD of the server should contain (empty for any)")
-        .defaultValue("")
-        .build()
-    );
+    private final Setting<Integer> port = sgAdv.add(new IntSetting.Builder()
+        .name("port").description("Server port (-1 = any).").defaultValue(-1).min(-1).noSlider().visible(advanced::get).build());
 
-    private final Setting<ServersRequest.Software> softwareSetting = sg.add(new EnumSetting.Builder<ServersRequest.Software>()
-        .name("software")
-        .description("The server software the servers should have")
-        .defaultValue(ServersRequest.Software.Any)
-        .build()
-    );
+    private final Setting<String> org = sgAdv.add(new StringSetting.Builder()
+        .name("org").description("Hosting organization contains.").defaultValue("").visible(advanced::get).build());
 
-    private final Setting<Version> versionSetting = sg.add(new EnumSetting.Builder<Version>()
-        .name("version")
-        .description("The protocol version the servers should have")
-        .defaultValue(Version.Current)
-        .build()
-    );
+    private final Setting<String> ipRange = sgAdv.add(new StringSetting.Builder()
+        .name("ip-range").description("IP or CIDR subnet (e.g. 1.2.3.0/24).").defaultValue("").visible(advanced::get).build());
 
-    private final Setting<Integer> protocolVersionSetting = sg.add(new IntSetting.Builder()
-        .name("protocol")
-        .description("The protocol version the servers should have")
-        .defaultValue(SharedConstants.getProtocolVersion())
-        .visible(() -> versionSetting.get() == Version.Protocol)
-        .min(0)
-        .noSlider()
-        .build()
-    );
+    private final Setting<String> excludeRange = sgAdv.add(new StringSetting.Builder()
+        .name("exclude-range").description("IP or CIDR subnet to exclude.").defaultValue("").visible(advanced::get).build());
 
-    private final Setting<String> versionStringSetting = sg.add(new StringSetting.Builder()
-        .name("version-string")
-        .description("The version string (e.g. 1.19.3) of the protocol version the server should have, results may contain different versions that have the same protocol version. Must be at least 1.7.1")
-        .defaultValue("1.21.1")
-        .visible(() -> versionSetting.get() == Version.VersionString)
-        .build()
-    );
+    private final Setting<TriState> hasFavicon = sgAdv.add(new EnumSetting.Builder<TriState>()
+        .name("has-favicon").description("Whether the server has a custom icon.").defaultValue(TriState.Any).visible(advanced::get).build());
 
-    private final Setting<Boolean> onlineOnlySetting = sg.add(new BoolSetting.Builder()
-        .name("online-only")
-        .description("Whether to only show servers that are online")
-        .defaultValue(true)
-        .build()
-    );
+    private final Setting<TriState> hasPlayerList = sgAdv.add(new EnumSetting.Builder<TriState>()
+        .name("has-player-list").description("Whether the server exposes a player sample.").defaultValue(TriState.Any).visible(advanced::get).build());
 
-    private final Setting<Boolean> ignoreModded = sg.add(new BoolSetting.Builder()
-        .name("ignore-modded")
-        .description("Will not give you servers where mods have been detected")
-        .defaultValue(true)
-        .build()
-    );
+    private final Setting<TriState> vanilla = sgAdv.add(new EnumSetting.Builder<TriState>()
+        .name("vanilla").description("Whether the server is vanilla.").defaultValue(TriState.Any).visible(advanced::get).build());
 
-    private final Setting<Boolean> onlyBungeeSpoofable = sg.add(new BoolSetting.Builder()
-        .name("only-bungee-spoofable")
-        .description("Will only give you servers where you can use BungeeSpoof")
-        .defaultValue(false)
-        .build()
-    );
+    private final Setting<TriState> isFull = sgAdv.add(new EnumSetting.Builder<TriState>()
+        .name("is-full").description("Whether the server is full.").defaultValue(TriState.Any).visible(advanced::get).build());
 
-    private final Setting<GeoSearchType> geoSearchTypeSetting = sg.add(new EnumSetting.Builder<GeoSearchType>()
-        .name("geo-search-type")
-        .description("Whether to search by ASN or country code")
-        .defaultValue(GeoSearchType.Country)
-        .build()
-    );
+    private final Setting<String> playerHistory = sgAdv.add(new StringSetting.Builder()
+        .name("player-history").description("Name of a player ever seen on the server.").defaultValue("").visible(advanced::get).build());
 
-    private final Setting<Integer> asnNumberSetting = sg.add(new IntSetting.Builder()
-        .name("asn")
-        .description("The ASN of the server")
-        .defaultValue(24940)
-        .noSlider()
-        .visible(() -> geoSearchTypeSetting.get() == GeoSearchType.ASN)
-        .build()
-    );
+    private final Setting<String> uuidHistory = sgAdv.add(new StringSetting.Builder()
+        .name("uuid-history").description("UUID of a player ever seen on the server.").defaultValue("").visible(advanced::get).build());
 
-    private final Setting<Country> countrySetting = sg.add(new CountrySetting.Builder()
-        .name("country")
-        .description("The country the server should be located in")
-        .defaultValue(ServerSeeker.COUNTRY_MAP.get("UN"))
-        .visible(() -> geoSearchTypeSetting.get() == GeoSearchType.Country)
-        .build()
-    );
+    private final Setting<String> onlineUuid = sgAdv.add(new StringSetting.Builder()
+        .name("online-uuid").description("UUID of a player currently online.").defaultValue("").visible(advanced::get).build());
 
-
-    MultiplayerScreen multiplayerScreen;
-
-
-    public FindNewServersScreen(MultiplayerScreen multiplayerScreen) {
-        super(GuiThemes.get(), "Find new servers");
+    public FindNewServersScreen(JoinMultiplayerScreen multiplayerScreen) {
+        super(GuiThemes.get(), "Find servers");
         this.multiplayerScreen = multiplayerScreen;
     }
 
     @Override
     public void initWidgets() {
+        showingResults = false;
         loadSettings();
         onClosed(this::saveSettings);
+
         settingsContainer = add(theme.verticalList()).widget();
         settingsContainer.add(theme.settings(settings));
-        add(theme.button("Reset all")).expandX().widget().action = this::resetSettings;
-        findButton = add(theme.button("Find")).expandX().widget();
-        findButton.action = () -> {
-            ServersRequest request = new ServersRequest();
 
-            switch (onlinePlayersNumTypeSetting.get()) {
-                // [n, "inf"]
-                case AtLeast -> request.setOnlinePlayers(atLeastOnlinePlayersSetting.get(), -1);
-
-                // [0, n]
-                case AtMost -> request.setOnlinePlayers(0, atMostOnlinePlayersSetting.get());
-
-                // [min, max]
-                case Between -> request.setOnlinePlayers(atLeastOnlinePlayersSetting.get(), atMostOnlinePlayersSetting.get());
-
-                // [n, n]
-                case Equals -> request.setOnlinePlayers(equalsOnlinePlayersSetting.get());
-            }
-
-            switch (maxPlayersNumTypeSetting.get()) {
-                // [n, "inf"]
-                case AtLeast -> request.setMaxPlayers(atLeastMaxPlayersSetting.get(), -1);
-
-                // [0, n]
-                case AtMost -> request.setMaxPlayers(0, atMostMaxPlayersSetting.get());
-
-                // [min, max]
-                case Between -> request.setMaxPlayers(atLeastMaxPlayersSetting.get(), atMostMaxPlayersSetting.get());
-
-                // [n, n]
-                case Equals -> request.setMaxPlayers(equalsMaxPlayersSetting.get());
-            }
-
-
-            switch (geoSearchTypeSetting.get()) {
-                case ASN -> request.setAsn(asnNumberSetting.get());
-                case Country -> {
-                    if (countrySetting.get().name.equalsIgnoreCase("any")) break;
-                    request.setCountryCode(countrySetting.get().code);
-                }
-            }
-
-            request.setCracked(crackedSetting.get().toBoolOrNull());
-            request.setDescription(descriptionSetting.get());
-            request.setSoftware(softwareSetting.get());
-
-            switch (versionSetting.get()) {
-                case Protocol -> request.setProtocolVersion(protocolVersionSetting.get());
-                case VersionString -> {
-                   int protocol = MCVersionUtil.versionToProtocol(versionStringSetting.get());
-                   if (protocol == -1) {
-                       clear();
-                       add(theme.label("Unknown version string"));
-                       return;
-                   }
-                   request.setProtocolVersion(protocol);
-                }
-                case Current -> request.setProtocolVersion(SharedConstants.getProtocolVersion());
-            }
-
-            if (!onlineOnlySetting.get()) request.setOnlineAfter(0);
-            if (ignoreModded.get()) request.setIgnoreModded(true);
-            if (onlyBungeeSpoofable.get()) request.setOnlyBungeeSpoofable(true);
-
-
-            this.locked = true;
-
-            this.threadHasFinished = false;
-            this.threadError = null;
-            this.threadServers = null;
-
-
-            MeteorExecutor.execute(() -> {
-                ServersResponse response = Http.post("https://api.serverseeker.net/servers")
-                    .exceptionHandler(e -> LOG.error("Could not post to 'servers': " + e.getMessage()))
-                    .bodyJson(request)
-                    .sendJson(ServersResponse.class);
-
-                if (response == null) {
-                    this.threadError = "Network error";
-                    this.threadHasFinished = true;
-                    return;
-                }
-
-                // Set error message if there is one
-                if (response.isError()) {
-                    this.threadError = response.error;
-                    this.threadHasFinished = true;
-                    return;
-                }
-                this.threadServers = response.data;
-                this.threadHasFinished = true;
-            });
-        };
+        WHorizontalList buttons = add(theme.horizontalList()).expandX().widget();
+        buttons.add(theme.button("Reset all")).expandX().widget().action = this::resetSettings;
+        buttons.add(theme.button("Find")).expandX().widget().action = this::runSearch;
     }
 
     @Override
     public void tick() {
         super.tick();
-        settings.tick(settingsContainer, theme);
+        if (!showingResults) settings.tick(settingsContainer, theme);
+    }
 
-        if (threadHasFinished) handleThreadFinish();
+    private void runSearch() {
+        page = 0;
+        total = -1;
+        fetchPage();
+    }
 
-        if (locked) {
-            if (timer > 2) {
-                findButton.set(getNext(findButton));
-                timer = 0;
+    private void fetchPage() {
+        saveSettings();
+        showingResults = true;
+        clear();
+        add(theme.label("Searching...")).expandX();
+
+        final String serversUrl = buildServersQuery().url();
+        final boolean needCount = total < 0;
+        final String countUrl = needCount ? buildFilterQuery(ServerQuery.count()).url() : null;
+
+        MeteorExecutor.execute(() -> {
+            ServersResponse resp = Http.get(serversUrl)
+                .exceptionHandler(e -> LOG.error("Could not fetch servers: ", e))
+                .sendJson(ServersResponse.class);
+
+            long count = total;
+            if (needCount) {
+                CountResponse cr = Http.get(countUrl)
+                    .exceptionHandler(e -> LOG.error("Could not fetch count: ", e))
+                    .sendJson(CountResponse.class);
+                if (cr != null) count = cr.data;
             }
-            else {
-                timer++;
-            }
+
+            final long finalCount = count;
+            Minecraft.getInstance().execute(() -> renderResults(resp, finalCount));
+        });
+    }
+
+    private void renderResults(ServersResponse resp, long count) {
+        clear();
+        total = count;
+
+        if (resp == null) {
+            showError("Network error");
+            return;
+        }
+        if (resp.isError()) {
+            showError(resp.error);
+            return;
         }
 
-        else if (!findButton.getText().equals("Find")) {
-            findButton.set("Find");
+        List<Server> servers = resp.data;
+        int shown = servers == null ? 0 : servers.size();
+        String totalStr = total < 0 ? "?" : String.valueOf(total);
+        add(theme.label("Page " + (page + 1) + " • " + shown + " shown • " + totalStr + " total")).expandX();
+
+        WHorizontalList nav = add(theme.horizontalList()).expandX().widget();
+        nav.add(theme.button("Back")).expandX().widget().action = () -> { showingResults = false; reload(); };
+        WButton prev = nav.add(theme.button("< Prev")).expandX().widget();
+        prev.action = () -> { if (page > 0) { page--; fetchPage(); } };
+        WButton next = nav.add(theme.button("Next >")).expandX().widget();
+        next.action = () -> { if (shown == LIMIT) { page++; fetchPage(); } };
+
+        if (servers == null || servers.isEmpty()) {
+            add(theme.label("No servers found")).expandX();
+            return;
         }
+
+        WButton addAll = add(theme.button("Add all on this page")).expandX().widget();
+        addAll.action = () -> {
+            ServerResults.addAll(servers, multiplayerScreen);
+            if (this.minecraft != null) this.minecraft.setScreen(multiplayerScreen);
+        };
+
+        WTable table = add(theme.table()).widget();
+        ServerResults.fill(theme, table, servers, multiplayerScreen, false);
+    }
+
+    private void showError(String message) {
+        add(theme.label(message)).expandX();
+        add(theme.button("Back")).expandX().widget().action = () -> { showingResults = false; reload(); };
+    }
+
+    private ServerQuery buildServersQuery() {
+        ServerQuery q = buildFilterQuery(ServerQuery.servers());
+        q.add("limit", LIMIT);
+        q.add("skip", (long) page * LIMIT);
+        switch (sort.get()) {
+            case LastPingNewOld -> { q.add("sort", "lastSeen"); q.add("descending", true); }
+            case LastPingOldNew -> { q.add("sort", "lastSeen"); q.add("descending", false); }
+            case DiscoveredNewOld -> { q.add("sort", "discovered"); q.add("descending", true); }
+            case DiscoveredOldNew -> { q.add("sort", "discovered"); q.add("descending", false); }
+            case None -> {}
+        }
+        return q;
+    }
+
+    private ServerQuery buildFilterQuery(ServerQuery q) {
+        Boolean cr = cracked.get().toBoolOrNull();
+        if (cr != null) q.add("cracked", cr);
+
+        Boolean wl = whitelisted.get().toBoolOrNull();
+        if (wl != null) q.add("whitelisted", wl);
+
+        switch (onlinePlayersType.get()) {
+            case Equals -> q.add("playerCount", onlinePlayersMin.get());
+            case AtLeast -> q.add("minPlayers", onlinePlayersMin.get());
+            case AtMost -> q.add("maxPlayers", onlinePlayersMax.get());
+            case Between -> { q.add("minPlayers", onlinePlayersMin.get()); q.add("maxPlayers", onlinePlayersMax.get()); }
+            case Any -> {}
+        }
+
+        if (playerCap.get() >= 0) q.add("playerLimit", playerCap.get());
+        q.add("version", version.get());
+        if (!description.get().isEmpty()) q.add("description", "%" + description.get() + "%");
+        q.add("onlinePlayer", onlinePlayer.get());
+
+        Country c = country.get();
+        if (c != null && !c.code.equalsIgnoreCase("UN")) q.add("country", c.code.toUpperCase());
+
+        // Advanced
+        if (protocol.get() >= 0) q.add("protocol", protocol.get());
+        if (port.get() >= 0) q.add("port", port.get());
+        if (!org.get().isEmpty()) q.add("org", "%" + org.get() + "%");
+        addRange(q, ipRange.get(), false);
+        addRange(q, excludeRange.get(), true);
+
+        Boolean fav = hasFavicon.get().toBoolOrNull();
+        if (fav != null) q.add("hasFavicon", fav);
+        Boolean pl = hasPlayerList.get().toBoolOrNull();
+        if (pl != null) q.add("hasPlayerSample", pl);
+        Boolean van = vanilla.get().toBoolOrNull();
+        if (van != null) q.add("vanilla", van);
+        Boolean full = isFull.get().toBoolOrNull();
+        if (full != null) q.add("full", full);
+
+        q.add("playerHistory", playerHistory.get());
+        q.add("uuidHistory", uuidHistory.get());
+        q.add("onlineUuid", onlineUuid.get());
+
+        if (seenAfter.get() != SeenAfter.Any) {
+            long cutoff = System.currentTimeMillis() / 1000 - seenAfter.get().secondsAgo();
+            q.add("seenAfter", cutoff);
+        }
+        return q;
+    }
+
+    private void addRange(ServerQuery q, String value, boolean exclude) {
+        if (value == null || value.isBlank()) return;
+        try {
+            long[] range = IpUtil.cidrToRange(value);
+            if (exclude) q.addExcludeRange(range);
+            else q.addIpRange(range);
+        } catch (Exception e) {
+            LOG.warn("Invalid IP range '{}': {}", value, e.getMessage());
+        }
+    }
+
+    public void saveSettings() {
+        savedSettings = settings.toTag();
+    }
+
+    public void loadSettings() {
+        if (savedSettings != null) settings.fromTag(savedSettings);
+    }
+
+    public void resetSettings() {
+        settings.reset();
+        saveSettings();
+        reload();
     }
 
     @Override
     protected void onClosed() {
         ServerSeeker.COUNTRY_MAP.values().forEach(Country::dispose);
-    }
-
-    private String getNext(WButton add) {
-        return switch (add.getText()) {
-            case "Find", "oo0" -> "ooo";
-            case "ooo" -> "0oo";
-            case "0oo" -> "o0o";
-            case "o0o" -> "oo0";
-            default -> "Find";
-        };
-    }
-
-    private void handleThreadFinish() {
-        this.threadHasFinished = false;
-        this.locked = false;
-        if (this.threadError != null) {
-            clear();
-            add(theme.label(this.threadError)).expandX();
-            WButton backButton = add(theme.button("Back")).expandX().widget();
-            backButton.action = this::reload;
-            this.locked = false;
-            return;
-        }
-        clear();
-        List<ServersResponse.Server> servers = this.threadServers;
-
-        if (servers.isEmpty()) {
-            add(theme.label("No servers found")).expandX();
-            WButton backButton = add(theme.button("Back")).expandX().widget();
-            backButton.action = this::reload;
-            this.locked = false;
-            return;
-        }
-        add(theme.label("Found " + servers.size() + " servers")).expandX();
-        WButton addAllButton = add(theme.button("Add all")).expandX().widget();
-        addAllButton.action = () -> {
-            for (ServersResponse.Server server : servers) {
-                String ip = server.server;
-
-                // Add server to list
-                MultiplayerScreenUtil.addNameIpToServerList(multiplayerScreen, "ServerSeeker " + ip, ip, false);
-            }
-            MultiplayerScreenUtil.saveList(multiplayerScreen);
-
-            // Reload widget
-            MultiplayerScreenUtil.reloadServerList(multiplayerScreen);
-
-            // Close screen
-            if (this.client == null) return;
-            client.setScreen(this.multiplayerScreen);
-        };
-
-        WTable table = add(theme.table()).widget();
-
-        table.add(theme.label("Server IP"));
-        table.add(theme.label("Version"));
-
-
-        table.row();
-
-        table.add(theme.horizontalSeparator()).expandX();
-        table.row();
-
-
-        for (ServersResponse.Server server : servers) {
-            final String serverIP = server.server;
-            String serverVersion = server.version;
-
-            table.add(theme.label(serverIP));
-            table.add(theme.label(serverVersion));
-
-            WButton addServerButton = theme.button("Add Server");
-            addServerButton.action = () -> {
-                ServerInfo info = new ServerInfo("ServerSeeker " + serverIP, serverIP, ServerInfo.ServerType.OTHER);
-                MultiplayerScreenUtil.addInfoToServerList(multiplayerScreen, info);
-                addServerButton.visible = false;
-            };
-
-            WButton joinServerButton = theme.button("Join Server");
-            HostAndPort hap = HostAndPort.fromString(serverIP);
-
-            joinServerButton.action = ()
-                -> ConnectScreen.connect(new TitleScreen(), MinecraftClient.getInstance(), new ServerAddress(hap.getHost(), hap.getPort()), new ServerInfo("a", hap.toString(), ServerInfo.ServerType.OTHER), false, null);
-
-            WButton serverInfoButton = theme.button("Server Info");
-            serverInfoButton.action = () -> this.client.setScreen(new ServerInfoScreen(serverIP));
-
-            table.add(addServerButton);
-            table.add(joinServerButton);
-            table.add(serverInfoButton);
-
-            table.row();
-        }
-
-        this.locked = false;
-    }
-
-    public void saveSettings() {
-        savedSettings = sg.toTag();
-    }
-
-    public void loadSettings() {
-        if (savedSettings == null) return;
-        sg.fromTag(savedSettings);
-    }
-
-    public void resetSettings() {
-        for (Setting<?> setting : sg) {
-            setting.reset();
-        }
-        saveSettings();
-        reload();
     }
 }

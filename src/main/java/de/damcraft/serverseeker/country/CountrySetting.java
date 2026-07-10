@@ -9,7 +9,7 @@ import meteordevelopment.meteorclient.gui.widgets.containers.WTable;
 import meteordevelopment.meteorclient.gui.widgets.pressable.WButton;
 import meteordevelopment.meteorclient.settings.IVisible;
 import meteordevelopment.meteorclient.settings.Setting;
-import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.CompoundTag;
 
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -63,14 +63,14 @@ public class CountrySetting extends Setting<Country> {
     }
 
     @Override
-    protected NbtCompound save(NbtCompound tag) {
+    protected CompoundTag save(CompoundTag tag) {
         tag.putString("value", get().code);
         return tag;
     }
 
     @Override
-    protected Country load(NbtCompound tag) {
-        return ServerSeeker.COUNTRY_MAP.get(tag.getString("value"));
+    protected Country load(CompoundTag tag) {
+        return ServerSeeker.COUNTRY_MAP.get(tag.getStringOr("value", ""));
     }
 
     public static class Builder extends SettingBuilder<Builder, Country, CountrySetting> {

@@ -1,9 +1,11 @@
 package de.damcraft.serverseeker.country;
 
+import com.mojang.blaze3d.textures.FilterMode;
+import com.mojang.blaze3d.textures.TextureFormat;
 import meteordevelopment.meteorclient.renderer.Texture;
 import meteordevelopment.meteorclient.utils.network.MeteorExecutor;
-import net.minecraft.resource.Resource;
-import net.minecraft.util.Identifier;
+import net.minecraft.server.packs.resources.Resource;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -25,7 +27,7 @@ public class Country implements Comparable<Country> {
     public Country(String name, String code) {
         this.name = name;
         this.code = code.toLowerCase(Locale.ENGLISH);
-        this.identifier = Identifier.of("serverseeker", String.format("textures/flags/%s.png", this.code));
+        this.identifier = Identifier.fromNamespaceAndPath("serverseeker", String.format("textures/flags/%s.png", this.code));
         if (mc.getResourceManager().getResource(this.identifier).isEmpty()) {
             LOG.error("Could not find flag for country: {}", this.code);
             this.textureData = new EmptyTextureData();
@@ -74,7 +76,7 @@ public class Country implements Comparable<Country> {
         @Override
         public void dispose() {
             if (this.state == State.DONE) {
-                this.texture.dispose();
+                this.texture.close();
                 this.texture = null;
             }
             this.state = State.EMPTY;
@@ -84,19 +86,21 @@ public class Country implements Comparable<Country> {
             this.state = State.LOADING;
             Resource textureResource = mc.getResourceManager().getResource(Country.this.identifier).orElseThrow();
 
-            try (InputStream imageStream = textureResource.getInputStream()) {
+            try (InputStream imageStream = textureResource.open()) {
                 BufferedImage bufferedImage = ImageIO.read(imageStream);
 
                 int[] pixels = bufferedImage.getRGB(0, 0, bufferedImage.getWidth(), bufferedImage.getHeight(), null, 0, bufferedImage.getWidth());
-                byte[] data = new byte[bufferedImage.getWidth() * bufferedImage.getHeight() * 3];
+                byte[] data = new byte[bufferedImage.getWidth() * bufferedImage.getHeight() * 4];
 
                 for (int i = 0; i < pixels.length; i++) {
-                    data[3 * i] = (byte) ((pixels[i] >> 16) & 0xFF); // r
-                    data[3 * i + 1] = (byte) ((pixels[i] >>  8) & 0xFF); // g
-                    data[3 * i + 2] = (byte) ((pixels[i]) & 0xFF); // b
+                    data[4 * i] = (byte) ((pixels[i] >> 16) & 0xFF); // r
+                    data[4 * i + 1] = (byte) ((pixels[i] >>  8) & 0xFF); // g
+                    data[4 * i + 2] = (byte) ((pixels[i]) & 0xFF); // b
+                    data[4 * i + 3] = (byte) ((pixels[i] >> 24) & 0xFF); // a
                 }
 
-                this.texture = new Texture(bufferedImage.getWidth(), bufferedImage.getHeight(), data, Texture.Format.RGB, Texture.Filter.Nearest, Texture.Filter.Nearest);
+                this.texture = new Texture(bufferedImage.getWidth(), bufferedImage.getHeight(), TextureFormat.RGBA8, FilterMode.NEAREST, FilterMode.NEAREST);
+                this.texture.upload(data);
                 this.state = State.DONE;
             } catch (IOException e) {
                 throw new RuntimeException(e);

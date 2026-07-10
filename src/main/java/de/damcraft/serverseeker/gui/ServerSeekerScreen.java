@@ -4,33 +4,44 @@ import de.damcraft.serverseeker.utils.MultiplayerScreenUtil;
 import meteordevelopment.meteorclient.gui.GuiThemes;
 import meteordevelopment.meteorclient.gui.WindowScreen;
 import meteordevelopment.meteorclient.gui.widgets.containers.WHorizontalList;
+import meteordevelopment.meteorclient.gui.widgets.containers.WVerticalList;
 import meteordevelopment.meteorclient.gui.widgets.pressable.WButton;
-import net.minecraft.client.gui.screen.multiplayer.MultiplayerScreen;
+import net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen;
 
 public class ServerSeekerScreen extends WindowScreen {
-    private final MultiplayerScreen multiplayerScreen;
+    private final JoinMultiplayerScreen multiplayerScreen;
 
-    public ServerSeekerScreen(MultiplayerScreen multiplayerScreen) {
+    public ServerSeekerScreen(JoinMultiplayerScreen multiplayerScreen) {
         super(GuiThemes.get(), "ServerSeeker");
         this.multiplayerScreen = multiplayerScreen;
     }
 
     @Override
     public void initWidgets() {
-        WHorizontalList widgetList = add(theme.horizontalList()).expandX().widget();
-        WButton newServersButton = widgetList.add(this.theme.button("Find new servers")).expandX().widget();
-        WButton findPlayersButton = widgetList.add(this.theme.button("Search players")).expandX().widget();
-        WButton cleanUpServersButton = widgetList.add(this.theme.button("Clean up")).expandX().widget();
-        newServersButton.action = () -> {
-            if (this.client == null) return;
-            this.client.setScreen(new FindNewServersScreen(this.multiplayerScreen));
-        };
-        findPlayersButton.action = () -> {
-            if (this.client == null) return;
-            this.client.setScreen(new FindPlayerScreen(this.multiplayerScreen));
-        };
+        WVerticalList list = add(theme.verticalList()).expandX().widget();
+
+        WHorizontalList row1 = list.add(theme.horizontalList()).expandX().widget();
+        row1.add(theme.button("Find servers")).expandX().widget().action = () ->
+            setScreenSafe(new FindNewServersScreen(this.multiplayerScreen));
+        row1.add(theme.button("Find players")).expandX().widget().action = () ->
+            setScreenSafe(new FindPlayerScreen(this.multiplayerScreen));
+        row1.add(theme.button("Bedrock search")).expandX().widget().action = () ->
+            setScreenSafe(new BedrockSearchScreen(this.multiplayerScreen));
+
+        WHorizontalList row2 = list.add(theme.horizontalList()).expandX().widget();
+        row2.add(theme.button("Ping server")).expandX().widget().action = () ->
+            setScreenSafe(new PingScreen(this.multiplayerScreen));
+        row2.add(theme.button("Random server")).expandX().widget().action = () ->
+            setScreenSafe(new RandomScreen(this.multiplayerScreen));
+        row2.add(theme.button("Stats")).expandX().widget().action = () ->
+            setScreenSafe(new StatsScreen());
+
+        list.add(theme.button("Stream snipe")).expandX().widget().action = () ->
+            setScreenSafe(new StreamSnipeScreen(this.multiplayerScreen));
+
+        WButton cleanUpServersButton = list.add(theme.button("Clean up")).expandX().widget();
         cleanUpServersButton.action = () -> {
-            if (this.client == null) return;
+            if (this.minecraft == null) return;
             clear();
             if (hasAnyServers()) {
                 add(theme.label("Are you sure you want to clean up your server list?"));
@@ -49,11 +60,16 @@ public class ServerSeekerScreen extends WindowScreen {
         };
     }
 
-    private boolean hasAnyServers() {
-        if (this.client == null) return false;
+    private void setScreenSafe(WindowScreen screen) {
+        if (this.minecraft == null) return;
+        this.minecraft.setScreen(screen);
+    }
 
-        for (int i = 0; i < this.multiplayerScreen.getServerList().size(); i++) {
-            if (this.multiplayerScreen.getServerList().get(i).name.startsWith("ServerSeeker")) {
+    private boolean hasAnyServers() {
+        if (this.minecraft == null) return false;
+
+        for (int i = 0; i < this.multiplayerScreen.getServers().size(); i++) {
+            if (this.multiplayerScreen.getServers().get(i).name.startsWith("ServerSeeker")) {
                 return true;
             }
         }
@@ -62,11 +78,11 @@ public class ServerSeekerScreen extends WindowScreen {
     }
 
     public void cleanUpServers() {
-        if (this.client == null) return;
+        if (this.minecraft == null) return;
 
-        for (int i = 0; i < this.multiplayerScreen.getServerList().size(); i++) {
-            if (this.multiplayerScreen.getServerList().get(i).name.startsWith("ServerSeeker")) {
-                this.multiplayerScreen.getServerList().remove(this.multiplayerScreen.getServerList().get(i));
+        for (int i = 0; i < this.multiplayerScreen.getServers().size(); i++) {
+            if (this.multiplayerScreen.getServers().get(i).name.startsWith("ServerSeeker")) {
+                this.multiplayerScreen.getServers().remove(this.multiplayerScreen.getServers().get(i));
                 i--;
             }
         }
@@ -74,6 +90,6 @@ public class ServerSeekerScreen extends WindowScreen {
         MultiplayerScreenUtil.saveList(multiplayerScreen);
         MultiplayerScreenUtil.reloadServerList(multiplayerScreen);
 
-        client.setScreen(this.multiplayerScreen);
+        this.minecraft.setScreen(this.multiplayerScreen);
     }
 }

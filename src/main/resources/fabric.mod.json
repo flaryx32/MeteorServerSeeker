@@ -5,13 +5,15 @@
   "name": "ServerSeeker",
   "description": "Search for basically any Minecraft server that exists. Basically copenheimer, but public and better.",
   "authors": [
-    "Crosby"
+    "flaryx32",
+    "crosby-moe",
+    "lina-x64"
   ],
   "contact": {
-    "repo": "https://github.com/RacoonDog/MeteorServerSeeker/",
+    "repo": "https://github.com/flaryx32/MeteorServerSeeker/",
     "discord": "https://discord.gg/serverseeker-1087081486747971705",
-    "homepage": "https://serverseeker.net/",
-    "issues": "https://github.com/RacoonDog/MeteorServerSeeker/issues",
+    "homepage": "https://www.meteorclient.com/",
+    "issues": "https://github.com/flaryx32/MeteorServerSeeker/issues",
     "sources": "https://github.com/RacoonDog/MeteorServerSeeker/"
   },
   "icon": "assets/serverseeker/icon.png",
@@ -30,7 +32,7 @@
     "meteor-client:commit": "${commit}",
     "modmenu": {
       "links": {
-        "modmenu.discord": "https://discord.gg/serverseeker-1087081486747971705"
+        "modmenu.discord": "https://discord.com/invite/bBGQZvd"
       }
     }
   },

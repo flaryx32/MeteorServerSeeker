@@ -1,19 +1,20 @@
 package de.damcraft.serverseeker.utils;
 
-import de.damcraft.serverseeker.ServerSeeker;
+import de.damcraft.serverseeker.api.IpUtil;
+import de.damcraft.serverseeker.api.Server;
+import de.damcraft.serverseeker.api.ServerQuery;
+import de.damcraft.serverseeker.api.ServersResponse;
 import de.damcraft.serverseeker.hud.HistoricPlayersHud;
-import de.damcraft.serverseeker.ssapi.requests.ServerInfoRequest;
-import de.damcraft.serverseeker.ssapi.responses.ServerInfoResponse;
 import meteordevelopment.meteorclient.events.game.GameJoinedEvent;
 import meteordevelopment.meteorclient.systems.hud.Hud;
 import meteordevelopment.meteorclient.systems.hud.HudElement;
 import meteordevelopment.meteorclient.utils.network.Http;
 import meteordevelopment.orbit.EventHandler;
-import net.minecraft.client.network.ClientPlayNetworkHandler;
+import net.minecraft.client.multiplayer.ClientPacketListener;
 
+import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 
 import static de.damcraft.serverseeker.ServerSeeker.LOG;
 import static meteordevelopment.meteorclient.MeteorClient.mc;
@@ -21,12 +22,10 @@ import static meteordevelopment.meteorclient.MeteorClient.mc;
 public class HistoricPlayersUpdater {
     @EventHandler
     private static void onGameJoinEvent(GameJoinedEvent ignoredEvent) {
-        // Run in a new thread
         new Thread(HistoricPlayersUpdater::update).start();
     }
 
     public static void update() {
-        // If the Hud contains the HistoricPlayersHud, update the players
         List<HistoricPlayersHud> huds = new ArrayList<>();
         for (HudElement hudElement : Hud.get()) {
             if (hudElement instanceof HistoricPlayersHud && hudElement.isActive()) {
@@ -35,32 +34,39 @@ public class HistoricPlayersUpdater {
         }
         if (huds.isEmpty()) return;
 
-        ClientPlayNetworkHandler networkHandler = mc.getNetworkHandler();
+        ClientPacketListener networkHandler = mc.getConnection();
         if (networkHandler == null) return;
 
-        String address = networkHandler.getConnection().getAddress().toString();
-        // Split it at "/" and take the second part
+        String address = networkHandler.getConnection().getRemoteAddress().toString();
         String[] addressParts = address.split("/");
         if (addressParts.length < 2) return;
         addressParts = addressParts[1].split(":");
 
-        String ip = addressParts[0];
+        String host = addressParts[0];
         int port = Integer.parseInt(addressParts[1]);
 
-        ServerInfoRequest request = new ServerInfoRequest(ServerSeeker.API_KEY, ip, port);
-
-        ServerInfoResponse response = Http.post("https://api.serverseeker.net/server_info")
-            .exceptionHandler(e -> LOG.error("Could not post to 'server_info': ", e))
-            .bodyJson(request)
-            .sendJson(ServerInfoResponse.class);
-
-        if (response == null) {
-            return;
+        long ipInt;
+        try {
+            ipInt = IpUtil.stringToInt(host);
+        } catch (Exception notNumeric) {
+            try {
+                ipInt = IpUtil.stringToInt(InetAddress.getByName(host).getHostAddress());
+            } catch (Exception e) {
+                return;
+            }
         }
 
+        String url = ServerQuery.servers().add("ip", ipInt).add("port", port).add("includePlayers", true).url();
+        ServersResponse response = Http.get(url)
+            .exceptionHandler(e -> LOG.error("Could not fetch server info: ", e))
+            .sendJson(ServersResponse.class);
+
+        if (response == null || response.data == null || response.data.isEmpty()) return;
+
+        Server server = response.data.get(0);
         for (HistoricPlayersHud hud : huds) {
-            hud.players = Objects.requireNonNullElse(response.players(), List.of());
-            hud.isCracked = response.cracked() != null && response.cracked();
+            hud.players = server.playerHistory != null ? server.playerHistory : List.of();
+            hud.isCracked = server.cracked != null && server.cracked;
         }
     }
 }

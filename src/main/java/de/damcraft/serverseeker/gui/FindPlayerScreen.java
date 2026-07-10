@@ -1,187 +1,118 @@
 package de.damcraft.serverseeker.gui;
 
-import com.google.common.net.HostAndPort;
-import de.damcraft.serverseeker.ssapi.requests.WhereisRequest;
-import de.damcraft.serverseeker.ssapi.responses.WhereisResponse;
-import de.damcraft.serverseeker.utils.MultiplayerScreenUtil;
+import de.damcraft.serverseeker.api.Server;
+import de.damcraft.serverseeker.api.ServerQuery;
+import de.damcraft.serverseeker.api.ServersResponse;
 import meteordevelopment.meteorclient.gui.GuiThemes;
 import meteordevelopment.meteorclient.gui.WindowScreen;
 import meteordevelopment.meteorclient.gui.widgets.containers.WContainer;
+import meteordevelopment.meteorclient.gui.widgets.containers.WHorizontalList;
 import meteordevelopment.meteorclient.gui.widgets.containers.WTable;
 import meteordevelopment.meteorclient.gui.widgets.pressable.WButton;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.utils.network.Http;
 import meteordevelopment.meteorclient.utils.network.MeteorExecutor;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.TitleScreen;
-import net.minecraft.client.gui.screen.multiplayer.ConnectScreen;
-import net.minecraft.client.gui.screen.multiplayer.MultiplayerScreen;
-import net.minecraft.client.network.ServerAddress;
-import net.minecraft.client.network.ServerInfo;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen;
 
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-import java.time.format.FormatStyle;
 import java.util.List;
 
 import static de.damcraft.serverseeker.ServerSeeker.LOG;
-import static meteordevelopment.meteorclient.MeteorClient.mc;
 
 public class FindPlayerScreen extends WindowScreen {
-    private final MultiplayerScreen multiplayerScreen;
+    private static final int LIMIT = 50;
 
-    public enum NameOrUUID {
-        Name,
-        UUID
+    private final JoinMultiplayerScreen multiplayerScreen;
+    private boolean showingResults;
+
+    public enum NameOrUUID { Name, UUID }
+    public enum When {
+        CurrentlyOnline, EverSeen;
+        @Override public String toString() {
+            return this == CurrentlyOnline ? "Currently online" : "Ever seen (history)";
+        }
     }
 
     private final Settings settings = new Settings();
     private final SettingGroup sg = settings.getDefaultGroup();
+    private WContainer settingsContainer;
+
+    private final Setting<When> when = sg.add(new EnumSetting.Builder<When>()
+        .name("when").description("Match players online now, or ever seen on the server.").defaultValue(When.EverSeen).build());
 
     private final Setting<NameOrUUID> nameOrUUID = sg.add(new EnumSetting.Builder<NameOrUUID>()
-        .name("name-or-uuid")
-        .description("Whether to search by name or UUID.")
-        .defaultValue(NameOrUUID.Name)
-        .build()
-    );
+        .name("name-or-uuid").description("Search by name or UUID.").defaultValue(NameOrUUID.Name).build());
 
     private final Setting<String> name = sg.add(new StringSetting.Builder()
-        .name("name")
-        .description("The name to search for.")
-        .defaultValue("")
-        .visible(() -> nameOrUUID.get() == NameOrUUID.Name)
-        .build()
-    );
+        .name("name").description("The name to search for.").defaultValue("")
+        .visible(() -> nameOrUUID.get() == NameOrUUID.Name).build());
 
     private final Setting<String> uuid = sg.add(new StringSetting.Builder()
-        .name("UUID")
-        .description("The UUID to search for.")
-        .defaultValue("")
-        .visible(() -> nameOrUUID.get() == NameOrUUID.UUID)
-        .build()
-    );
+        .name("uuid").description("The UUID to search for.").defaultValue("")
+        .visible(() -> nameOrUUID.get() == NameOrUUID.UUID).build());
 
-    WContainer settingsContainer;
-
-    public FindPlayerScreen(MultiplayerScreen multiplayerScreen) {
-        super(GuiThemes.get(), "Find Players");
+    public FindPlayerScreen(JoinMultiplayerScreen multiplayerScreen) {
+        super(GuiThemes.get(), "Find players");
         this.multiplayerScreen = multiplayerScreen;
     }
 
     @Override
     public void initWidgets() {
-        WContainer settingsContainer = add(theme.verticalList()).widget();
+        showingResults = false;
+        settingsContainer = add(theme.verticalList()).widget();
         settingsContainer.add(theme.settings(settings)).expandX();
-
-        this.settingsContainer = settingsContainer;
-
-        add(theme.button("Find Player")).expandX().widget().action = () -> {
-            WhereisRequest request = new WhereisRequest();
-
-            switch (nameOrUUID.get()) {
-                case Name -> request.setName(name.get());
-                case UUID -> request.setUuid(uuid.get());
-            }
-
-            MeteorExecutor.execute(() -> {
-                WhereisResponse response = Http.post("https://api.serverseeker.net/whereis")
-                    .exceptionHandler(e -> LOG.error("Could not post to 'whereis': " + e.getMessage()))
-                    .bodyJson(request.json())
-                    .sendJson(WhereisResponse.class);
-
-                MinecraftClient.getInstance().execute(() -> {
-                    if (response == null) {
-                        add(theme.label("Network error")).expandX();
-                        return;
-                    }
-
-                    // Set error message if there is one
-                    if (response.isError()) {
-                        add(theme.label(response.error)).expandX();
-                        return;
-                    }
-                    clear();
-
-                    List<WhereisResponse.Record> data = response.data;
-                    if (data.isEmpty()) {
-                        add(theme.label("Not found")).expandX();
-                        return;
-                    }
-
-                    load(data);
-                });
-            });
-        };
-    }
-
-    private void load(List<WhereisResponse.Record> data) {
-        add(theme.label("Found " + data.size() + " servers:"));
-        WTable table = add(theme.table()).widget();
-        WButton addAllButton = table.add(theme.button("Add all")).expandX().widget();
-        addAllButton.action = () -> addAllServers(data);
-
-        table.row();
-        table.add(theme.label("Server IP"));
-        table.add(theme.label("Player name"));
-        table.add(theme.label("Last seen"));
-
-        table.row();
-        table.add(theme.horizontalSeparator()).expandX();
-        table.row();
-
-
-        for (WhereisResponse.Record server : data) {
-            String serverIP = server.server;
-            String playerName = server.name;
-            long playerLastSeen = server.last_seen; // Unix timestamp
-
-            // Format last seen to human-readable
-            String playerLastSeenFormatted = DateTimeFormatter.ofLocalizedDate(FormatStyle.SHORT)
-                .format(Instant.ofEpochSecond(playerLastSeen).atZone(ZoneId.systemDefault()).toLocalDateTime());
-            int minWidth = (int)(mc.getWindow().getWidth() * 0.2);
-            table.add(theme.label(serverIP)).minWidth(minWidth);
-            table.add(theme.label(playerName)).minWidth(minWidth);
-            table.add(theme.label(playerLastSeenFormatted)).minWidth(minWidth);
-
-            WButton addServerButton = theme.button("Add Server");
-            addServerButton.action = () -> {
-                ServerInfo info = new ServerInfo("ServerSeeker " + serverIP + " (Player: " + playerName + ")", serverIP, ServerInfo.ServerType.OTHER);
-                MultiplayerScreenUtil.addInfoToServerList(multiplayerScreen, info);
-                addServerButton.visible = false;
-            };
-
-            HostAndPort hap = HostAndPort.fromString(serverIP);
-            WButton joinServerButton = theme.button("Join Server");
-            joinServerButton.action = () -> {
-                ConnectScreen.connect(new TitleScreen(), MinecraftClient.getInstance(), new ServerAddress(hap.getHost(), hap.getPort()), new ServerInfo("a", hap.toString(), ServerInfo.ServerType.OTHER), false, null);
-            };
-
-            WButton serverInfoButton = theme.button("Server Info");
-            serverInfoButton.action = () -> this.client.setScreen(new ServerInfoScreen(serverIP));
-
-            table.add(addServerButton);
-            table.add(joinServerButton);
-            table.add(serverInfoButton);
-            table.row();
-        }
-    }
-
-    private void addAllServers(List<WhereisResponse.Record> records) {
-        for (WhereisResponse.Record record : records) {
-            String serverIP = record.server;
-            String playerName = record.name;
-            ServerInfo info = new ServerInfo("ServerSeeker " + serverIP + " (Player: " + playerName + ")", serverIP, ServerInfo.ServerType.OTHER);
-            MultiplayerScreenUtil.addInfoToServerList(multiplayerScreen, info, false);
-        }
-        MultiplayerScreenUtil.saveList(multiplayerScreen);
-        if (client == null) return;
-        client.setScreen(this.multiplayerScreen);
+        add(theme.button("Find player")).expandX().widget().action = this::search;
     }
 
     @Override
     public void tick() {
         super.tick();
-        settings.tick(settingsContainer, theme);
+        if (!showingResults) settings.tick(settingsContainer, theme);
+    }
+
+    private void search() {
+        showingResults = true;
+        clear();
+        add(theme.label("Searching...")).expandX();
+
+        boolean byName = nameOrUUID.get() == NameOrUUID.Name;
+        String value = byName ? name.get() : uuid.get();
+        boolean online = when.get() == When.CurrentlyOnline;
+
+        ServerQuery q = ServerQuery.servers().add("limit", LIMIT);
+        if (online) q.add(byName ? "onlinePlayer" : "onlineUuid", value);
+        else q.add(byName ? "playerHistory" : "uuidHistory", value);
+
+        final String url = q.url();
+        MeteorExecutor.execute(() -> {
+            ServersResponse resp = Http.get(url)
+                .exceptionHandler(e -> LOG.error("Could not search players: ", e))
+                .sendJson(ServersResponse.class);
+            Minecraft.getInstance().execute(() -> render(resp));
+        });
+    }
+
+    private void render(ServersResponse resp) {
+        clear();
+        add(theme.button("Back")).expandX().widget().action = () -> { showingResults = false; reload(); };
+
+        if (resp == null) { add(theme.label("Network error")).expandX(); return; }
+        if (resp.isError()) { add(theme.label(resp.error)).expandX(); return; }
+
+        List<Server> servers = resp.data;
+        if (servers == null || servers.isEmpty()) {
+            add(theme.label("No servers found")).expandX();
+            return;
+        }
+
+        add(theme.label("Found " + servers.size() + (servers.size() == LIMIT ? "+" : "") + " servers")).expandX();
+        WButton addAll = add(theme.button("Add all")).expandX().widget();
+        addAll.action = () -> {
+            ServerResults.addAll(servers, multiplayerScreen);
+            if (this.minecraft != null) this.minecraft.setScreen(multiplayerScreen);
+        };
+
+        WTable table = add(theme.table()).widget();
+        ServerResults.fill(theme, table, servers, multiplayerScreen, false);
     }
 }

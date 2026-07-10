@@ -20,7 +20,7 @@ import meteordevelopment.meteorclient.systems.modules.Category;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.loader.api.metadata.CustomValue;
-import net.minecraft.item.Items;
+import net.minecraft.world.item.Items;
 import org.slf4j.Logger;
 
 import java.util.Map;
@@ -37,15 +37,8 @@ public class ServerSeeker extends MeteorAddon {
     add(new Join misconfigured BungeeCord backends with any name you want!())
      */
     public static final Logger LOG = LogUtils.getLogger();
-    public static final Category CATEGORY = new Category("ServerSeeker", Items.SPYGLASS.getDefaultStack());
+    public static final Category CATEGORY = new Category("ServerSeeker", Items.SPYGLASS::getDefaultInstance);
     public static final Map<String, Country> COUNTRY_MAP = new Object2ReferenceOpenHashMap<>();
-
-    /*
-    Hardcoded ServerSeeker API key
-    Since the ServerSeeker authentication flow is currently unusable, hard coding a generously-donated user API key is
-    the simplest option for all parties involved
-     */
-    public static final String API_KEY = "ZzOluD4Uj0TPrRPZuE94UtBuIVjYxNMt";
 
     public static final Gson gson = new Gson();
 
@@ -79,12 +72,12 @@ public class ServerSeeker extends MeteorAddon {
 
     @Override
     public GithubRepo getRepo() {
-        return new GithubRepo("RacoonDog", "MeteorServerSeeker");
+        return new GithubRepo("flaryx32", "MeteorServerSeeker");
     }
 
     @Override
     public String getWebsite() {
-        return "https://serverseeker.net/";
+        return "https://www.meteorclient.com/";
     }
 
     @Override

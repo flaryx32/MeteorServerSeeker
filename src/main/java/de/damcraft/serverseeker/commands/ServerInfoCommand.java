@@ -4,14 +4,16 @@ import com.google.common.net.HostAndPort;
 import com.mojang.brigadier.LiteralMessage;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
-import de.damcraft.serverseeker.ServerSeeker;
-import de.damcraft.serverseeker.ssapi.requests.ServerInfoRequest;
-import de.damcraft.serverseeker.ssapi.responses.ServerInfoResponse;
+import de.damcraft.serverseeker.api.IpUtil;
+import de.damcraft.serverseeker.api.Server;
+import de.damcraft.serverseeker.api.ServerQuery;
+import de.damcraft.serverseeker.api.ServersResponse;
 import meteordevelopment.meteorclient.commands.Command;
 import meteordevelopment.meteorclient.utils.network.Http;
 import meteordevelopment.meteorclient.utils.network.MeteorExecutor;
-import net.minecraft.command.CommandSource;
+import net.minecraft.client.multiplayer.ClientSuggestionProvider;
 
+import java.net.InetAddress;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -28,62 +30,58 @@ public class ServerInfoCommand extends Command {
     }
 
     @Override
-    public void build(LiteralArgumentBuilder<CommandSource> builder) {
+    public void build(LiteralArgumentBuilder<ClientSuggestionProvider> builder) {
         builder.executes(context -> {
-            if (mc.getCurrentServerEntry() == null) {
+            if (mc.getCurrentServer() == null) {
                 throw SINGLEPLAYER_EXCEPTION.create();
             }
 
-            HostAndPort hap = HostAndPort.fromString(mc.getCurrentServerEntry().address);
-            ServerInfoRequest request = new ServerInfoRequest(ServerSeeker.API_KEY, hap.getHost(), hap.getPort());
+            HostAndPort hap = HostAndPort.fromString(mc.getCurrentServer().ip);
+            String host = hap.getHost();
+            int port = hap.hasPort() ? hap.getPort() : 25565;
 
             MeteorExecutor.execute(() -> {
-                ServerInfoResponse response = Http.post("https://api.serverseeker.net/server_info")
-                    .exceptionHandler(e -> LOG.error("Could not post to 'server_info': ", e))
-                    .bodyJson(request)
-                    .sendJson(ServerInfoResponse.class);
+                long ipInt;
+                try {
+                    ipInt = IpUtil.stringToInt(host);
+                } catch (Exception notNumeric) {
+                    try {
+                        ipInt = IpUtil.stringToInt(InetAddress.getByName(host).getHostAddress());
+                    } catch (Exception e) {
+                        mc.execute(() -> error("Could not resolve " + host));
+                        return;
+                    }
+                }
+
+                String url = ServerQuery.servers().add("ip", ipInt).add("port", port).add("includePlayers", true).url();
+                ServersResponse response = Http.get(url)
+                    .exceptionHandler(e -> LOG.error("Could not fetch server info: ", e))
+                    .sendJson(ServersResponse.class);
 
                 mc.execute(() -> {
-                    if (response == null) {
-                        error("Network error");
-                        return;
-                    }
+                    if (response == null) { error("Network error"); return; }
+                    if (response.isError()) { error(response.error); return; }
+                    if (response.data == null || response.data.isEmpty()) { warning("Server not found in the database."); return; }
 
-                    if (response.isError()) {
-                        error(response.error());
-                        return;
-                    }
-
-                    Boolean cracked = response.cracked();
-                    String description = response.description();
+                    Server server = response.data.get(0);
+                    String description = server.description == null ? "" : server.description.replace("\n", "\\n").replace("§r", "");
                     if (description.length() > 100) description = description.substring(0, 100) + "...";
-                    description = description.replace("\n", "\\n");
-                    description = description.replace("§r", "");
-                    int onlinePlayers = response.onlinePlayers();
-                    int maxPlayers = response.maxPlayers();
-                    int protocol = response.protocol();
-                    int lastSeen = response.lastSeen();
-                    String lastSeenDate = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
-                        .format(Instant.ofEpochSecond(lastSeen).atZone(ZoneId.systemDefault()).toLocalDateTime());
-                    String version = response.version();
-                    List<ServerInfoResponse.Player> players = response.players();
 
                     info("-- Server Info --");
-                    info("Cracked: (highlight)" + (cracked == null ? "Unknown" : cracked.toString()));
+                    info("Auth: (highlight)" + (server.cracked == null ? "Unknown" : server.cracked ? "Cracked" : "Premium"));
+                    info("Whitelist: (highlight)" + (server.whitelisted == null ? "Unknown" : server.whitelisted ? "Enabled" : "Disabled"));
                     info("Description: (highlight)" + description);
-                    info("Online Players (last scan): (highlight)" + onlinePlayers);
-                    info("Max Players: (highlight)" + maxPlayers);
-                    info("Last Scanned: (highlight)" + lastSeenDate);
-                    info("Version: (highlight)" + version + " (default)(" + protocol + ")");
-                    if (players.isEmpty()) {
+                    if (server.players != null) info("Online Players (last scan): (highlight)" + server.players.online + "/" + server.players.max);
+                    info("Last Scanned: (highlight)" + date(server.lastSeenSeconds()));
+                    info("Version: (highlight)" + server.versionName() + " (default)(" + server.protocol() + ")");
+
+                    List<Server.PlayerEntry> players = server.playerHistory;
+                    if (players == null || players.isEmpty()) {
                         warning("No player history.");
                     } else {
                         info("-- Player History --");
-                        for (ServerInfoResponse.Player player : players) {
-                            long playerLastSeen = player.lastSeen();
-                            String lastSeenFormatted = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
-                                .format(Instant.ofEpochSecond(playerLastSeen).atZone(ZoneId.systemDefault()).toLocalDateTime());
-                            info("- (highlight)" + player.name() + " " + lastSeenFormatted);
+                        for (Server.PlayerEntry player : players) {
+                            info("- (highlight)" + player.name + " " + date(player.lastSession));
                         }
                     }
                 });
@@ -91,5 +89,11 @@ public class ServerInfoCommand extends Command {
 
             return SINGLE_SUCCESS;
         });
+    }
+
+    private static String date(long seconds) {
+        if (seconds <= 0) return "Unknown";
+        return DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
+            .format(Instant.ofEpochSecond(seconds).atZone(ZoneId.systemDefault()).toLocalDateTime());
     }
 }
