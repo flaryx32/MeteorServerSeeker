@@ -8,6 +8,7 @@ import de.damcraft.serverseeker.country.Country;
 import de.damcraft.serverseeker.country.CountrySetting;
 import de.damcraft.serverseeker.hud.HistoricPlayersHud;
 import de.damcraft.serverseeker.modules.BungeeSpoofModule;
+import de.damcraft.serverseeker.translation.TranslatorModule;
 import de.damcraft.serverseeker.utils.HistoricPlayersUpdater;
 import it.unimi.dsi.fastutil.objects.Object2ReferenceOpenHashMap;
 import meteordevelopment.meteorclient.MeteorClient;
@@ -50,6 +51,7 @@ public class ServerSeeker extends MeteorAddon {
         Countries.init();
 
         Modules.get().add( new BungeeSpoofModule() );
+        Modules.get().add( new TranslatorModule() );
         Hud.get().register(HistoricPlayersHud.INFO);
         Commands.add( new ServerInfoCommand() );
 
